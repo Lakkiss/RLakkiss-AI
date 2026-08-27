@@ -11,6 +11,7 @@ function reply(res, status, data) {
     'Access-Control-Allow-Headers': 'Content-Type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS'
   });
+
   res.end(JSON.stringify(data));
 }
 
@@ -20,7 +21,10 @@ function readJson(req) {
 
     req.on('data', chunk => {
       body += chunk;
-      if (body.length > 1000000) req.destroy();
+
+      if (body.length > 1000000) {
+        req.destroy();
+      }
     });
 
     req.on('end', () => {
@@ -48,7 +52,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method !== 'POST' || req.url !== '/chat') {
-    return reply(res, 404, { error: 'Not found' });
+    return reply(res, 404, {
+      error: 'Not found'
+    });
   }
 
   if (!KEY) {
@@ -59,16 +65,21 @@ const server = http.createServer(async (req, res) => {
 
   try {
     const body = await readJson(req);
-    const messages = Array.isArray(body.messages) ? body.messages : [];
+
+    const messages = Array.isArray(body.messages)
+      ? body.messages
+      : [];
 
     const r = await fetch(
       'https://gen.pollinations.ai/v1/chat/completions',
       {
         method: 'POST',
+
         headers: {
           'Authorization': `Bearer ${KEY}`,
           'Content-Type': 'application/json'
         },
+
         body: JSON.stringify({
           model: MODEL,
           messages
@@ -79,10 +90,13 @@ const server = http.createServer(async (req, res) => {
     const text = await r.text();
 
     if (!r.ok) {
-      return reply(res, r.status, { error: text });
+      return reply(res, r.status, {
+        error: text
+      });
     }
 
     const data = JSON.parse(text);
+
     const content =
       data?.choices?.[0]?.message?.content ?? '';
 
@@ -98,5 +112,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`RLakkiss AI backend listening on ${PORT}`);
+  console.log(
+    `RLakkiss AI backend listening on ${PORT}`
+  );
 });
