@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   SafeAreaView,
   View,
@@ -10,10 +10,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Keyboard,
+  ActivityIndicator,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
 import * as Clipboard from 'expo-clipboard';
+import * as Speech from 'expo-speech';
 
 const API_URL = 'https://rlakkiss-ai.onrender.com/chat';
 
@@ -33,15 +36,16 @@ const translations = {
     thinking: 'Thinking...',
     language: 'Language',
     english: 'English',
-    arabic: 'Arabic',
-    french: 'French',
+    arabic: 'العربية',
+    french: 'Français',
     photo: 'Photo',
     file: 'File',
     copy: 'Copy',
     copied: 'Copied!',
-    cancel: 'Cancel',
     photoPermission: 'Photo permission is required.',
     error: 'Could not connect to server.',
+    speak: 'Speak',
+    stop: 'Stop',
   },
 
   ar: {
@@ -57,9 +61,10 @@ const translations = {
     file: 'ملف',
     copy: 'نسخ',
     copied: 'تم النسخ!',
-    cancel: 'إلغاء',
     photoPermission: 'يجب السماح بالوصول إلى الصور.',
-    error: 'تعذر الاتصال بالسيرفر.',
+    error: 'تعذر الاتصال بالخادم.',
+    speak: 'استماع',
+    stop: 'إيقاف',
   },
 
   fr: {
@@ -75,26 +80,74 @@ const translations = {
     file: 'Fichier',
     copy: 'Copier',
     copied: 'Copié !',
-    cancel: 'Annuler',
     photoPermission: 'L’autorisation des photos est requise.',
     error: 'Impossible de se connecter au serveur.',
+    speak: 'Écouter',
+    stop: 'Arrêter',
   },
+};
+
+const speechLanguages: Record<Language, string> = {
+  en: 'en-US',
+  ar: 'ar-SA',
+  fr: 'fr-FR',
 };
 
 export default function Index() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
-
   const [language, setLanguage] = useState<Language>('en');
   const [showPlus, setShowPlus] = useState(false);
   const [showLanguages, setShowLanguages] = useState(false);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
+
+  const inputRef = useRef<TextInput>(null);
+  const listRef = useRef<FlatList<Message>>(null);
 
   const t = translations[language];
+
+  useEffect(() => {
+    return () => {
+      Speech.stop();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (messages.length > 0) {
+      setTimeout(() => {
+        listRef.current?.scrollToEnd({
+          animated: true,
+        });
+      }, 50);
+    }
+  }, [messages, loading]);
 
   async function copyMessage(text: string) {
     await Clipboard.setStringAsync(text);
     Alert.alert(t.copied);
+  }
+
+  async function speakMessage(
+    id: string,
+    text: string
+  ) {
+    if (speakingId === id) {
+      await Speech.stop();
+      setSpeakingId(null);
+      return;
+    }
+
+    await Speech.stop();
+    setSpeakingId(id);
+
+    Speech.speak(text, {
+      language: speechLanguages[language],
+      rate: 0.9,
+      onDone: () => setSpeakingId(null),
+      onStopped: () => setSpeakingId(null),
+      onError: () => setSpeakingId(null),
+    });
   }
 
   async function pickImage() {
@@ -108,35 +161,50 @@ export default function Index() {
       return;
     }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: false,
-      quality: 0.8,
-    });
+    const result =
+      await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        quality: 0.8,
+      });
 
     if (!result.canceled && result.assets.length > 0) {
+      const asset = result.assets[0];
+
       setInput(old =>
-        old ? `${old}\n[Image attached]` : '[Image attached]'
+        old
+          ? `${old}\n[Image attached: ${
+              asset.fileName || 'image'
+            }]`
+          : `[Image attached: ${
+              asset.fileName || 'image'
+            }]`
       );
+
+      inputRef.current?.focus();
     }
   }
 
   async function pickFile() {
     setShowPlus(false);
 
-    const result = await DocumentPicker.getDocumentAsync({
-      type: '*/*',
-      copyToCacheDirectory: true,
-    });
+    const result =
+      await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
 
     if (!result.canceled && result.assets.length > 0) {
       const file = result.assets[0];
 
       setInput(old =>
         old
-          ? `${old}\n[File: ${file.name}]`
-          : `[File: ${file.name}]`
+          ? `${old}\n[File attached: ${file.name}]`
+          : `[File attached: ${file.name}]`
       );
+
+      inputRef.current?.focus();
     }
   }
 
@@ -148,23 +216,33 @@ export default function Index() {
   async function sendMessage() {
     const text = input.trim();
 
-    if (!text || loading) return;
+    if (!text || loading) {
+      return;
+    }
+
+    Keyboard.dismiss();
+
+    setShowPlus(false);
+    setShowLanguages(false);
 
     const userMessage: Message = {
-      id: Date.now().toString(),
+      id: `${Date.now()}-user`,
       role: 'user',
       content: text,
     };
 
-    const history = messages.map(m => ({
-      role: m.role,
-      content: m.content,
+    const history = messages.map(message => ({
+      role: message.role,
+      content: message.content,
     }));
 
-    setMessages(old => [...old, userMessage]);
+    setMessages(old => [
+      ...old,
+      userMessage,
+    ]);
+
     setInput('');
     setLoading(true);
-    setShowPlus(false);
 
     try {
       const response = await fetch(API_URL, {
@@ -186,22 +264,30 @@ export default function Index() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || 'Server error');
+        throw new Error(
+          data?.error || 'Server error'
+        );
       }
+
+      const reply =
+        typeof data?.reply === 'string' &&
+        data.reply.trim()
+          ? data.reply.trim()
+          : 'No response received.';
 
       setMessages(old => [
         ...old,
         {
-          id: (Date.now() + 1).toString(),
+          id: `${Date.now()}-assistant`,
           role: 'assistant',
-          content: data.reply || 'No response.',
+          content: reply,
         },
       ]);
     } catch (error) {
       setMessages(old => [
         ...old,
         {
-          id: (Date.now() + 1).toString(),
+          id: `${Date.now()}-error`,
           role: 'assistant',
           content: t.error,
         },
@@ -215,63 +301,97 @@ export default function Index() {
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         style={styles.container}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+        behavior={
+          Platform.OS === 'ios'
+            ? 'padding'
+            : 'height'
+        }
+        keyboardVerticalOffset={0}
       >
-
         {/* HEADER */}
         <View style={styles.header}>
-          <View>
-            <Text style={styles.title}>{t.title}</Text>
-            <Text style={styles.subtitle}>{t.subtitle}</Text>
+          <View style={styles.headerText}>
+            <Text style={styles.title}>
+              {t.title}
+            </Text>
+
+            <Text style={styles.subtitle}>
+              {t.subtitle}
+            </Text>
           </View>
 
           <TouchableOpacity
             style={styles.languageButton}
+            activeOpacity={0.7}
             onPress={() => {
-              setShowLanguages(!showLanguages);
+              setShowLanguages(
+                value => !value
+              );
               setShowPlus(false);
             }}
           >
-            <Text style={styles.languageIcon}>🌐</Text>
+            <Text style={styles.languageIcon}>
+              🌐
+            </Text>
           </TouchableOpacity>
         </View>
 
         {/* LANGUAGE MENU */}
         {showLanguages && (
           <View style={styles.languageMenu}>
-            <Text style={styles.menuTitle}>{t.language}</Text>
+            <Text style={styles.menuTitle}>
+              {t.language}
+            </Text>
 
             <TouchableOpacity
               style={styles.menuItem}
-              onPress={() => selectLanguage('en')}
+              onPress={() =>
+                selectLanguage('en')
+              }
             >
-              <Text style={styles.menuText}>🇬🇧 {t.english}</Text>
+              <Text style={styles.menuText}>
+                🇺🇸 {t.english}
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.menuItem}
-              onPress={() => selectLanguage('ar')}
+              onPress={() =>
+                selectLanguage('ar')
+              }
             >
-              <Text style={styles.menuText}>🇱🇧 {t.arabic}</Text>
+              <Text style={styles.menuText}>
+                🇱🇧 {t.arabic}
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.menuItem}
-              onPress={() => selectLanguage('fr')}
+              onPress={() =>
+                selectLanguage('fr')
+              }
             >
-              <Text style={styles.menuText}>🇫🇷 {t.french}</Text>
+              <Text style={styles.menuText}>
+                🇫🇷 {t.french}
+              </Text>
             </TouchableOpacity>
           </View>
         )}
 
         {/* CHAT */}
         <FlatList
+          ref={listRef}
           style={styles.chat}
           data={messages}
           keyExtractor={item => item.id}
-          contentContainerStyle={styles.messages}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.messages,
+            messages.length === 0 &&
+              styles.emptyMessages,
+          ]}
           renderItem={({ item }) => (
             <View
               style={[
@@ -289,28 +409,81 @@ export default function Index() {
                     : styles.aiMessage,
                 ]}
               >
-                <Text style={styles.messageText}>
+                <Text
+                  style={[
+                    styles.messageText,
+                    language === 'ar' &&
+                      styles.arabicText,
+                  ]}
+                >
                   {item.content}
                 </Text>
               </View>
 
-              {/* COPY BUTTON ONLY FOR AI */}
               {item.role === 'assistant' && (
-                <TouchableOpacity
-                  style={styles.copyButton}
-                  onPress={() => copyMessage(item.content)}
-                >
-                  <Text style={styles.copyIcon}>📋</Text>
-                  <Text style={styles.copyText}>{t.copy}</Text>
-                </TouchableOpacity>
+                <View style={styles.actionRow}>
+                  <TouchableOpacity
+                    style={styles.actionButton}
+                    onPress={() =>
+                      copyMessage(item.content)
+                    }
+                  >
+                    <Text style={styles.actionIcon}>
+                      📋
+                    </Text>
+
+                    <Text style={styles.actionText}>
+                      {t.copy}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.actionButton}
+                    onPress={() =>
+                      speakMessage(
+                        item.id,
+                        item.content
+                      )
+                    }
+                  >
+                    <Text style={styles.actionIcon}>
+                      {speakingId === item.id
+                        ? '⏹'
+                        : '🔊'}
+                    </Text>
+
+                    <Text style={styles.actionText}>
+                      {speakingId === item.id
+                        ? t.stop
+                        : t.speak}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
           )}
+          ListEmptyComponent={
+            <View style={styles.welcome}>
+              <Text style={styles.welcomeTitle}>
+                {t.title}
+              </Text>
+
+              <Text style={styles.welcomeText}>
+                {language === 'ar'
+                  ? 'كيف يمكنني مساعدتك؟'
+                  : language === 'fr'
+                  ? 'Comment puis-je vous aider ?'
+                  : 'How can I help you?'}
+              </Text>
+            </View>
+          }
         />
 
         {/* THINKING */}
         {loading && (
           <View style={styles.thinkingBox}>
+            <ActivityIndicator size="small" />
+
             <Text style={styles.thinkingText}>
               {t.thinking}
             </Text>
@@ -324,16 +497,26 @@ export default function Index() {
               style={styles.plusItem}
               onPress={pickImage}
             >
-              <Text style={styles.plusIcon}>📷</Text>
-              <Text style={styles.plusText}>{t.photo}</Text>
+              <Text style={styles.plusIcon}>
+                🖼️
+              </Text>
+
+              <Text style={styles.plusText}>
+                {t.photo}
+              </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.plusItem}
               onPress={pickFile}
             >
-              <Text style={styles.plusIcon}>📎</Text>
-              <Text style={styles.plusText}>{t.file}</Text>
+              <Text style={styles.plusIcon}>
+                📎
+              </Text>
+
+              <Text style={styles.plusText}>
+                {t.file}
+              </Text>
             </TouchableOpacity>
           </View>
         )}
@@ -341,18 +524,21 @@ export default function Index() {
         {/* INPUT */}
         <View style={styles.inputArea}>
           <View style={styles.inputRow}>
-
             <TouchableOpacity
               style={styles.plusButton}
+              activeOpacity={0.7}
               onPress={() => {
-                setShowPlus(!showPlus);
+                setShowPlus(value => !value);
                 setShowLanguages(false);
               }}
             >
-              <Text style={styles.plusButtonText}>＋</Text>
+              <Text style={styles.plusButtonText}>
+                +
+              </Text>
             </TouchableOpacity>
 
             <TextInput
+              ref={inputRef}
               style={styles.input}
               value={input}
               onChangeText={setInput}
@@ -361,6 +547,7 @@ export default function Index() {
               multiline
               textAlignVertical="top"
               editable={!loading}
+              blurOnSubmit={false}
             />
 
             <TouchableOpacity
@@ -370,16 +557,24 @@ export default function Index() {
                   styles.buttonDisabled,
               ]}
               onPress={sendMessage}
-              disabled={!input.trim() || loading}
+              disabled={
+                !input.trim() || loading
+              }
+              activeOpacity={0.8}
             >
-              <Text style={styles.sendText}>
-                {loading ? '...' : '↑'}
-              </Text>
+              {loading ? (
+                <ActivityIndicator
+                  color="#fff"
+                  size="small"
+                />
+              ) : (
+                <Text style={styles.sendText}>
+                  ↑
+                </Text>
+              )}
             </TouchableOpacity>
-
           </View>
         </View>
-
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -394,7 +589,7 @@ const styles = StyleSheet.create({
   header: {
     minHeight: 72,
     paddingHorizontal: 18,
-    paddingTop: 12,
+    paddingTop: 10,
     paddingBottom: 8,
     flexDirection: 'row',
     alignItems: 'center',
@@ -403,14 +598,20 @@ const styles = StyleSheet.create({
     borderBottomColor: '#eee',
   },
 
+  headerText: {
+    flex: 1,
+  },
+
   title: {
     fontSize: 24,
     fontWeight: '700',
+    color: '#111',
   },
 
   subtitle: {
     color: '#777',
     marginTop: 2,
+    fontSize: 13,
   },
 
   languageButton: {
@@ -423,25 +624,25 @@ const styles = StyleSheet.create({
   },
 
   languageIcon: {
-    fontSize: 22,
+    fontSize: 21,
   },
 
   languageMenu: {
     position: 'absolute',
-    top: 65,
+    top: 68,
     right: 15,
-    zIndex: 20,
-    width: 180,
+    zIndex: 50,
+    width: 190,
     backgroundColor: '#fff',
-    borderRadius: 14,
+    borderRadius: 15,
     padding: 8,
-    elevation: 8,
+    elevation: 10,
     shadowColor: '#000',
     shadowOpacity: 0.15,
-    shadowRadius: 10,
+    shadowRadius: 12,
     shadowOffset: {
       width: 0,
-      height: 4,
+      height: 5,
     },
   },
 
@@ -459,6 +660,7 @@ const styles = StyleSheet.create({
 
   menuText: {
     fontSize: 15,
+    color: '#222',
   },
 
   chat: {
@@ -466,13 +668,36 @@ const styles = StyleSheet.create({
   },
 
   messages: {
-    padding: 15,
-    paddingBottom: 10,
+    paddingHorizontal: 15,
+    paddingTop: 15,
+    paddingBottom: 18,
+  },
+
+  emptyMessages: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
+
+  welcome: {
+    alignItems: 'center',
+    paddingHorizontal: 25,
+  },
+
+  welcomeTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#222',
+    marginBottom: 8,
+  },
+
+  welcomeText: {
+    fontSize: 17,
+    color: '#777',
   },
 
   messageWrapper: {
-    marginBottom: 10,
-    maxWidth: '85%',
+    marginBottom: 14,
+    maxWidth: '88%',
   },
 
   userWrapper: {
@@ -486,66 +711,84 @@ const styles = StyleSheet.create({
   },
 
   message: {
-    padding: 12,
-    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderRadius: 17,
   },
 
   userMessage: {
-    backgroundColor: '#ddd',
+    backgroundColor: '#222',
+    borderBottomRightRadius: 5,
   },
 
   aiMessage: {
-    backgroundColor: '#eee',
+    backgroundColor: '#f0f0f0',
+    borderBottomLeftRadius: 5,
   },
 
   messageText: {
     fontSize: 16,
-    lineHeight: 22,
+    lineHeight: 23,
+    color: '#111',
   },
 
-  copyButton: {
+  arabicText: {
+    writingDirection: 'rtl',
+    textAlign: 'right',
+  },
+
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 5,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    marginTop: 4,
   },
 
-  copyIcon: {
-    fontSize: 15,
-    marginRight: 5,
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    marginRight: 4,
   },
 
-  copyText: {
-    fontSize: 13,
+  actionIcon: {
+    fontSize: 14,
+    marginRight: 4,
+  },
+
+  actionText: {
+    fontSize: 12,
     color: '#666',
   },
 
   thinkingBox: {
+    minHeight: 34,
     paddingHorizontal: 18,
-    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 
   thinkingText: {
     color: '#777',
     fontSize: 14,
+    marginLeft: 8,
   },
 
   plusMenu: {
     position: 'absolute',
     bottom: 75,
     left: 10,
-    zIndex: 30,
+    zIndex: 40,
     backgroundColor: '#fff',
     borderRadius: 15,
     padding: 8,
-    elevation: 8,
+    elevation: 10,
     shadowColor: '#000',
     shadowOpacity: 0.15,
-    shadowRadius: 10,
+    shadowRadius: 12,
     shadowOffset: {
       width: 0,
-      height: 4,
+      height: 5,
     },
   },
 
@@ -554,7 +797,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 12,
     paddingHorizontal: 14,
-    minWidth: 130,
+    minWidth: 140,
   },
 
   plusIcon: {
@@ -564,6 +807,7 @@ const styles = StyleSheet.create({
 
   plusText: {
     fontSize: 16,
+    color: '#222',
   },
 
   inputArea: {
@@ -572,7 +816,8 @@ const styles = StyleSheet.create({
     borderTopColor: '#eee',
     paddingHorizontal: 10,
     paddingTop: 8,
-    paddingBottom: 8,
+    paddingBottom:
+      Platform.OS === 'android' ? 10 : 8,
   },
 
   inputRow: {
@@ -594,20 +839,23 @@ const styles = StyleSheet.create({
     fontSize: 30,
     lineHeight: 32,
     color: '#222',
+    fontWeight: '300',
   },
 
   input: {
     flex: 1,
     minHeight: 48,
-    maxHeight: 110,
+    maxHeight: 120,
     borderWidth: 1,
     borderColor: '#ccc',
-    borderRadius: 14,
-    paddingHorizontal: 12,
+    borderRadius: 16,
+    paddingHorizontal: 13,
     paddingTop: 12,
     paddingBottom: 10,
     fontSize: 16,
+    lineHeight: 21,
     backgroundColor: '#fff',
+    color: '#111',
   },
 
   sendButton: {
@@ -622,8 +870,9 @@ const styles = StyleSheet.create({
 
   sendText: {
     color: '#fff',
-    fontSize: 25,
+    fontSize: 28,
     fontWeight: '700',
+    marginTop: -3,
   },
 
   buttonDisabled: {
