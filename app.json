@@ -8,9 +8,11 @@
     "scheme": "rlakkissmobile",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+
     "ios": {
       "supportsTablet": true
     },
+
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -19,14 +21,21 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.lakkiss.RLakkissmobile"
     },
+
     "web": {
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
+
     "plugins": [
       "expo-router",
+      "expo-speech",
+      "expo-speech-recognition",
+      "expo-image-picker",
+      "expo-document-picker",
       [
         "expo-splash-screen",
         {
@@ -40,9 +49,17 @@
         }
       ]
     ],
+
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "bad9c234-0141-4308-9de2-70ae3a96bbfa"
+      }
     }
   }
 }
