@@ -2,7 +2,7 @@ const http = require('http');
 
 const PORT = Number(process.env.PORT || 3000);
 const KEY = process.env.GEMINI_API_KEY;
-const MODEL = 'gemini-2.5-flash';
+const MODEL = 'gemini-3.6-flash';
 
 function reply(res, status, data) {
   res.writeHead(status, {
@@ -142,5 +142,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`RLakkiss AI backend listening on ${PORT}`);
+  console.log(
+    `RLakkiss AI backend listening on ${PORT}`
+  );
 });
