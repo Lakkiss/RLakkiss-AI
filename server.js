@@ -1,8 +1,8 @@
 const http = require('http');
 
 const PORT = Number(process.env.PORT || 3000);
-const KEY = process.env.POLLINATIONS_API_KEY;
-const MODEL = process.env.POLLINATIONS_MODEL || 'openai';
+const KEY = process.env.GEMINI_API_KEY;
+const MODEL = 'gemini-2.5-flash';
 
 function reply(res, status, data) {
   res.writeHead(status, {
@@ -24,6 +24,7 @@ function readJson(req) {
 
       if (body.length > 1000000) {
         req.destroy();
+        reject(new Error('Request too large'));
       }
     });
 
@@ -47,7 +48,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     return reply(res, 200, {
       ok: true,
-      provider: 'pollinations'
+      provider: 'gemini'
     });
   }
 
@@ -59,33 +60,58 @@ const server = http.createServer(async (req, res) => {
 
   if (!KEY) {
     return reply(res, 500, {
-      error: 'POLLINATIONS_API_KEY is not configured'
+      error: 'GEMINI_API_KEY is not configured'
     });
   }
 
   try {
     const body = await readJson(req);
 
-    const messages = Array.isArray(body.messages)
-      ? body.messages
-      : [];
+    let message = '';
 
-    const r = await fetch(
-      'https://gen.pollinations.ai/v1/chat/completions',
-      {
-        method: 'POST',
+    if (typeof body.message === 'string') {
+      message = body.message;
+    } else if (Array.isArray(body.messages)) {
+      message = body.messages
+        .map(m => {
+          const role = m.role || 'user';
+          const content =
+            typeof m.content === 'string'
+              ? m.content
+              : '';
 
-        headers: {
-          'Authorization': `Bearer ${KEY}`,
-          'Content-Type': 'application/json'
-        },
-
-        body: JSON.stringify({
-          model: MODEL,
-          messages
+          return `${role}: ${content}`;
         })
-      }
-    );
+        .join('\n');
+    }
+
+    if (!message.trim()) {
+      return reply(res, 400, {
+        error: 'Message is required'
+      });
+    }
+
+    const url =
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-goog-api-key': KEY
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: message
+              }
+            ]
+          }
+        ]
+      })
+    });
 
     const text = await r.text();
 
@@ -98,13 +124,17 @@ const server = http.createServer(async (req, res) => {
     const data = JSON.parse(text);
 
     const content =
-      data?.choices?.[0]?.message?.content ?? '';
+      data?.candidates?.[0]?.content?.parts
+        ?.map(part => part.text || '')
+        .join('') || '';
 
     return reply(res, 200, {
       reply: content
     });
 
   } catch (e) {
+    console.error(e);
+
     return reply(res, 500, {
       error: String(e)
     });
@@ -112,7 +142,5 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(
-    `RLakkiss AI backend listening on ${PORT}`
-  );
+  console.log(`RLakkiss AI backend listening on ${PORT}`);
 });
